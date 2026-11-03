@@ -339,17 +339,157 @@ def flip_image(image_path, direction="horizontal", output_path=None):
     return _save_image(flipped, image_path, suffix, output_path)
 
 
-if __name__ == "__main__":
-    import sys
+# ====== 6. 灰度化 ======
 
-    # 保持原来的用法：只传一个图片路径时查看图片信息
-    if len(sys.argv) == 2:
-        get_image_info(sys.argv[1])
+def grayscale_image(image_path, output_path=None):
+    """
+    将图片转换为灰度图。
+
+    带透明通道的图片会先丢弃 alpha 通道再灰度化；
+    如果原图已经是灰度图，则直接保存一份副本。
+    """
+    image = _load_image(image_path)
+    if image is None:
+        return None
+
+    if image.ndim == 3 and image.shape[2] == 4:
+        # BGRA -> 灰度，alpha 通道会被丢弃
+        gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        print("[信息] 检测到透明通道，灰度化时将丢弃 alpha 通道。")
+    elif image.ndim == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
-        print('用法: python "second homework.py" <图片路径>')
-        print("图片编辑可在代码中调用：")
-        print("  resize_image(path, width=None, height=None)")
-        print("  crop_image(path, left, top, right, bottom)")
-        print("  rotate_image(path, angle)              # 90 / 180 / 270")
-        print('  flip_image(path, "horizontal" | "vertical")')
-        print("保存结果默认生成新文件，不会覆盖原图。")
+        gray = image.copy()
+        print("[信息] 原图已经是灰度图，直接保存副本。")
+
+    print(f"[信息] 灰度化：{image.shape[1]}x{image.shape[0]} -> 单通道灰度图")
+    return _save_image(gray, image_path, "_gray", output_path)
+
+
+# ====== 7. 格式转换（PNG -> JPG） ======
+
+def convert_to_jpg(image_path, output_path=None):
+    """
+    将图片转换为 JPG。
+
+    重点：JPEG 不支持透明通道（alpha），如果原图是 RGBA（常见于带透明
+    背景的 PNG），必须先转成 3 通道 BGR/RGB，否则直接保存会失败。
+    """
+    image = _load_image(image_path)
+    if image is None:
+        return None
+
+    # 关键步骤：BGRA -> BGR，去掉第 4 个 alpha 通道
+    if image.ndim == 3 and image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        print("[信息] 检测到透明通道，已先转换为 3 通道 RGB，再保存为 JPG。")
+
+    if _detect_format(image_path) == "JPEG":
+        print("[提示] 原图已经是 JPEG，仍会生成一份新的 JPG 副本。")
+
+    # 未指定输出路径时，默认在原图旁边生成 *.jpg，而不是沿用原扩展名
+    if output_path is None:
+        stem, _ = os.path.splitext(image_path)
+        output_path = f"{stem}_converted.jpg"
+    else:
+        ext = os.path.splitext(output_path)[1].lower()
+        if ext not in (".jpg", ".jpeg"):
+            print("[错误] JPG 转换的输出文件必须使用 .jpg 或 .jpeg 扩展名。")
+            return None
+
+    print(
+        f"[信息] 转换为 JPG：{image.shape[1]}x{image.shape[0]}，"
+        f"{1 if image.ndim == 2 else image.shape[2]} 通道"
+    )
+    return _save_image(image, image_path, "_converted", output_path)
+
+
+# ====== 交互式命令行界面 ======
+
+def _prompt_int(prompt, optional=False):
+    """读取一个整数；optional=True 时允许直接回车返回 None。"""
+    while True:
+        text = input(prompt).strip()
+        if optional and text == "":
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            print("[提示] 请输入有效的整数。")
+
+
+def interactive_menu():
+    """简单的命令行菜单，循环让用户选择要执行的操作。"""
+    menu = """
+========== 图片处理工具 ==========
+  1. 查看图片信息
+  2. 缩放图片
+  3. 裁剪图片
+  4. 旋转图片
+  5. 翻转图片
+  6. 灰度化
+  7. 转换为 JPG
+  0. 退出
+==================================
+提示：所有操作都会生成新文件，不会覆盖原图。
+"""
+
+    while True:
+        print(menu)
+        try:
+            choice = input("请选择操作 [0-7]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已退出。")
+            break
+
+        if choice == "0":
+            print("已退出。")
+            break
+        if choice not in {str(i) for i in range(1, 8)}:
+            print("[提示] 无效选项，请重新输入。\n")
+            continue
+
+        try:
+            image_path = input("请输入图片路径: ").strip().strip('"').strip("'")
+        except (EOFError, KeyboardInterrupt):
+            print("\n已退出。")
+            break
+
+        if not image_path:
+            print("[提示] 图片路径不能为空。\n")
+            continue
+
+        try:
+            if choice == "1":
+                get_image_info(image_path)
+            elif choice == "2":
+                width = _prompt_int("目标宽度（留空表示自动）: ", optional=True)
+                height = _prompt_int("目标高度（留空表示自动）: ", optional=True)
+                resize_image(image_path, width, height)
+            elif choice == "3":
+                left = _prompt_int("左边界: ")
+                top = _prompt_int("上边界: ")
+                right = _prompt_int("右边界（不包含）: ")
+                bottom = _prompt_int("下边界（不包含）: ")
+                crop_image(image_path, left, top, right, bottom)
+            elif choice == "4":
+                angle = _prompt_int("旋转角度 (90/180/270): ")
+                rotate_image(image_path, angle)
+            elif choice == "5":
+                direction = input(
+                    "翻转方向 (horizontal/vertical，或 h/v): "
+                ).strip()
+                flip_image(image_path, direction)
+            elif choice == "6":
+                grayscale_image(image_path)
+            elif choice == "7":
+                convert_to_jpg(image_path)
+        except (EOFError, KeyboardInterrupt):
+            print("\n已退出。")
+            break
+
+        input("\n按回车返回菜单...")
+
+
+if __name__ == "__main__":
+    interactive_menu()
